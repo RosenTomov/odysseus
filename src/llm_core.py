@@ -5,6 +5,7 @@ import time
 import json
 import logging
 import hashlib
+import ipaddress
 from fastapi import HTTPException
 from typing import Optional, Dict, List
 from urllib.parse import urlparse
@@ -223,26 +224,45 @@ def _is_lmstudio_models_payload(data: dict) -> bool:
         and "architecture" in models[0]
     )
 
+def _is_local_host(host: Optional[str]) -> bool:
+    """True for loopback/LAN/Tailscale hosts (never public domains)."""
+    host = (host or "").lower()
+    if not host:
+        return False
+    if host in {"localhost", "host.docker.internal"} or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host
+    if ip.is_loopback or ip.is_private or ip.is_link_local:
+        return True
+    return ip in ipaddress.ip_network("100.64.0.0/10")
+
+
 _PROVIDER_FINGERPRINT_TTL = 60.0
 _provider_fingerprint_cache: Dict[tuple, tuple] = {}
 
-def _fingerprint_is_lmstudio(host: str, port: int) -> bool:
+def _fingerprint_is_lmstudio(url: str) -> bool:
     """Confirm LM Studio by probing its native /api/v1/models (short-TTL cached)."""
-    key = (host, port)
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    key = (host, parsed.port)
     now = time.time()
     cached = _provider_fingerprint_cache.get(key)
     if cached is not None and cached[1] > now:
         return cached[0] == "lmstudio"
+    authority = host if parsed.port is None else f"{host}:{parsed.port}"
+    probe_url = f"{parsed.scheme or 'http'}://{authority}/api/v1/models"
     try:
-        r = httpx.get(f"http://{host}:{port}/api/v1/models", timeout=1.0)
+        r = httpx.get(probe_url, timeout=1.0)
     except Exception:
         return False
     try:
         ok = r.is_success and _is_lmstudio_models_payload(r.json() or {})
     except Exception:
         ok = False
-    verdict = "lmstudio" if ok else ""
-    _provider_fingerprint_cache[key] = (verdict, now + _PROVIDER_FINGERPRINT_TTL)
+    _provider_fingerprint_cache[key] = ("lmstudio" if ok else "", now + _PROVIDER_FINGERPRINT_TTL)
     return ok
 
 
@@ -258,8 +278,7 @@ def _detect_provider(url: str) -> str:
     if "groq.com" in u:
         return "groq"
     try:
-        parsed = urlparse(url)
-        if parsed.port == 1234 and _fingerprint_is_lmstudio(parsed.hostname or "localhost", 1234):
+        if _is_local_host(urlparse(url).hostname) and _fingerprint_is_lmstudio(url):
             return "lmstudio"
     except Exception:
         pass
@@ -291,11 +310,8 @@ def _provider_label(url: str) -> str:
     if "together.xyz" in u or "together.ai" in u: return "Together"
     if "fireworks.ai" in u: return "Fireworks"
     if "ollama" in u or ":11434" in u: return "Ollama"
-    try:
-        if urlparse(url).port == 1234:
-            return "LM Studio"
-    except (ValueError, TypeError):
-        pass
+    if _detect_provider(url) == "lmstudio":
+        return "LM Studio"
     if "localhost" in u or "127.0.0.1" in u: return "local endpoint"
     try:
         host = urlparse(url).hostname or "provider"
@@ -690,7 +706,7 @@ async def llm_call_async(
     prompt_type: Optional[str] = None
 ) -> str:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
-    provider = _detect_provider(url)
+    provider = await asyncio.to_thread(_detect_provider, url)
     messages_copy = _sanitize_llm_messages(messages)
 
     # Consolidate multiple system messages into one at the start.
@@ -793,7 +809,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
       - event: error                       — errors
       - data: [DONE]                       — end of stream
     """
-    provider = _detect_provider(url)
+    provider = await asyncio.to_thread(_detect_provider, url)
     messages_copy = _sanitize_llm_messages(messages)
 
     # Consolidate multiple system messages into one at the start.
