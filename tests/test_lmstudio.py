@@ -30,41 +30,36 @@ from src.model_discovery import ModelDiscovery
 # ════════════════════════════════════════════════════════════
 
 class TestDetectProviderLmStudio:
-    """Port 1234 is necessary but no longer sufficient: the result is confirmed
-    by the native-API fingerprint so other servers on 1234 aren't misdetected."""
+    """A local endpoint is LM Studio only when the native-API fingerprint
+    confirms it — independent of port, so any/no port works and other servers
+    (vLLM, llama.cpp, proxies) are never misdetected."""
 
-    def test_localhost_port_1234_fingerprint_confirms(self, monkeypatch):
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
-        assert llm_core._detect_provider("http://localhost:1234/v1/chat/completions") == "lmstudio"
+    @pytest.mark.parametrize("url", [
+        "http://localhost:1234/v1/chat/completions",   # default port
+        "http://127.0.0.1:1234/v1/chat/completions",
+        "http://192.168.1.10:1234/v1/chat/completions",
+        "http://localhost:5000/v1/chat/completions",   # custom port
+        "http://my-lm-box:8080/v1/chat/completions",   # Tailscale-style hostname
+        "http://localhost:1234",                       # no path
+        "http://localhost/v1/chat/completions",        # no explicit port
+    ])
+    def test_local_host_fingerprint_confirms(self, monkeypatch, url):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
+        assert llm_core._detect_provider(url) == "lmstudio"
 
-    def test_127_port_1234_fingerprint_confirms(self, monkeypatch):
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
-        assert llm_core._detect_provider("http://127.0.0.1:1234/v1/chat/completions") == "lmstudio"
-
-    def test_lan_ip_port_1234_fingerprint_confirms(self, monkeypatch):
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
-        assert llm_core._detect_provider("http://192.168.1.10:1234/v1/chat/completions") == "lmstudio"
-
-    def test_port_1234_no_path_fingerprint_confirms(self, monkeypatch):
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
-        assert llm_core._detect_provider("http://localhost:1234") == "lmstudio"
-
-    def test_port_1234_non_lmstudio_server_not_misdetected(self, monkeypatch):
-        # vLLM / llama.cpp / a proxy on 1234: the fingerprint fails, so the
-        # result must NOT be lmstudio — otherwise stream_options is silently
-        # dropped and token-usage stats break for that server.
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: False)
+    def test_local_non_lmstudio_server_not_misdetected(self, monkeypatch):
+        # vLLM / llama.cpp / a proxy: the fingerprint fails, so the result must
+        # NOT be lmstudio — otherwise stream_options is silently dropped and
+        # token-usage stats break for that server.
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: False)
         assert llm_core._detect_provider("http://localhost:1234/v1/chat/completions") == "openai"
 
-    def test_port_11234_does_not_return_lmstudio(self):
-        # Substring false-positive guard: 11234 contains "1234" but is not port
-        # 1234, so the probe never runs.
-        result = llm_core._detect_provider("http://localhost:11234/v1/chat/completions")
-        assert result != "lmstudio"
-
-    def test_port_12340_does_not_return_lmstudio(self):
-        result = llm_core._detect_provider("http://localhost:12340/v1/chat/completions")
-        assert result != "lmstudio"
+    def test_public_host_is_never_fingerprinted(self, monkeypatch):
+        # A cloud endpoint must never trigger a probe, even on port 1234.
+        def fail(_u):
+            raise AssertionError("public host must not be fingerprinted")
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", fail)
+        assert llm_core._detect_provider("https://api.example.com:1234/v1/chat/completions") == "openai"
 
 
 # ════════════════════════════════════════════════════════════
@@ -96,14 +91,20 @@ class TestDetectProviderOtherProviders:
 # ════════════════════════════════════════════════════════════
 
 class TestProviderLabelLmStudio:
-    def test_localhost_port_1234_label(self):
+    """The label reuses _detect_provider, so it inherits port-independent
+    fingerprint detection rather than guessing from the port."""
+
+    def test_localhost_label(self, monkeypatch):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
         assert llm_core._provider_label("http://localhost:1234/v1/chat/completions") == "LM Studio"
 
-    def test_lan_ip_port_1234_label(self):
-        assert llm_core._provider_label("http://192.168.1.10:1234/v1/chat/completions") == "LM Studio"
+    def test_custom_port_label(self, monkeypatch):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
+        assert llm_core._provider_label("http://192.168.1.10:5000/v1/chat/completions") == "LM Studio"
 
-    def test_port_1234_without_path_label(self):
-        assert llm_core._provider_label("http://localhost:1234") == "LM Studio"
+    def test_local_non_lmstudio_falls_back_to_local_endpoint(self, monkeypatch):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: False)
+        assert llm_core._provider_label("http://localhost:8000/v1/chat/completions") == "local endpoint"
 
 
 class TestProviderLabelOtherProviders:
@@ -140,6 +141,24 @@ class TestModelDiscoveryPorts:
 
         discovery.discover_models()
         assert 1234 in scanned_ports
+
+    def test_discover_models_scans_custom_lm_studio_port(self, monkeypatch):
+        """A non-default port in LM_STUDIO_URL must be added to the scan targets."""
+        monkeypatch.delenv("LLM_HOSTS", raising=False)
+        monkeypatch.setenv("LM_STUDIO_URL", "http://my-lm-box:5000")
+        monkeypatch.setattr(
+            "src.model_discovery.discover_tailscale_hosts", lambda: [],
+        )
+        discovery = ModelDiscovery(default_host="localhost")
+        scanned = []
+
+        def fake_check_port(host, port):
+            scanned.append((host, port))
+            return None
+
+        monkeypatch.setattr(discovery, "_check_port", fake_check_port)
+        discovery.discover_models()
+        assert ("my-lm-box", 5000) in scanned
 
 
 # ════════════════════════════════════════════════════════════
@@ -239,6 +258,30 @@ class TestIsLmStudioModelsPayload:
 
 
 # ════════════════════════════════════════════════════════════
+# 4e. _is_local_host — fingerprint-probe guard
+# ════════════════════════════════════════════════════════════
+
+class TestIsLocalHost:
+    @pytest.mark.parametrize("host", [
+        "localhost", "127.0.0.1", "10.0.0.5", "172.16.3.4", "192.168.1.10",
+        "100.64.0.1",            # Tailscale / CGNAT
+        "169.254.1.1",           # link-local
+        "host.docker.internal",
+        "my-mac.local",          # mDNS
+        "my-lm-box",             # bare single-label name
+    ])
+    def test_local_hosts_true(self, host):
+        assert llm_core._is_local_host(host) is True
+
+    @pytest.mark.parametrize("host", [
+        "api.openai.com", "api.anthropic.com", "8.8.8.8",
+        "example.com", "", None,
+    ])
+    def test_public_or_empty_hosts_false(self, host):
+        assert llm_core._is_local_host(host) is False
+
+
+# ════════════════════════════════════════════════════════════
 # 4d. _fingerprint_is_lmstudio — cached native-API probe
 # ════════════════════════════════════════════════════════════
 
@@ -251,23 +294,39 @@ class TestFingerprintIsLmStudio:
         yield
         llm_core._provider_fingerprint_cache.clear()
 
+    URL = "http://localhost:5000/v1/chat/completions"
+
     def test_positive_shape_returns_true(self, monkeypatch):
-        monkeypatch.setattr(llm_core.httpx, "get",
-                            lambda url, timeout=None: _FakeResponse(self.LMSTUDIO_NATIVE))
-        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is True
+        captured = {}
+        def fake_get(url, timeout=None):
+            captured["url"] = url
+            return _FakeResponse(self.LMSTUDIO_NATIVE)
+        monkeypatch.setattr(llm_core.httpx, "get", fake_get)
+        assert llm_core._fingerprint_is_lmstudio(self.URL) is True
+        # Probes the same authority the chat request uses (here: the custom port).
+        assert captured["url"] == "http://localhost:5000/api/v1/models"
+
+    def test_no_port_probes_scheme_default(self, monkeypatch):
+        captured = {}
+        def fake_get(url, timeout=None):
+            captured["url"] = url
+            return _FakeResponse(self.LMSTUDIO_NATIVE)
+        monkeypatch.setattr(llm_core.httpx, "get", fake_get)
+        assert llm_core._fingerprint_is_lmstudio("http://my-lm-box/v1/chat/completions") is True
+        assert captured["url"] == "http://my-lm-box/api/v1/models"
 
     def test_responding_non_lmstudio_returns_false(self, monkeypatch):
         monkeypatch.setattr(llm_core.httpx, "get",
                             lambda url, timeout=None: _FakeResponse({"data": [{"id": "x"}]}))
-        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is False
+        assert llm_core._fingerprint_is_lmstudio(self.URL) is False
 
     def test_probe_error_returns_false_and_not_cached(self, monkeypatch):
         def boom(url, timeout=None):
             raise OSError("connection refused")
         monkeypatch.setattr(llm_core.httpx, "get", boom)
-        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is False
+        assert llm_core._fingerprint_is_lmstudio(self.URL) is False
         # A transient error must not be cached, so the next call re-probes.
-        assert ("localhost", 1234) not in llm_core._provider_fingerprint_cache
+        assert ("localhost", 5000) not in llm_core._provider_fingerprint_cache
 
     def test_result_is_cached_within_ttl(self, monkeypatch):
         calls = {"n": 0}
@@ -277,8 +336,8 @@ class TestFingerprintIsLmStudio:
             return _FakeResponse(self.LMSTUDIO_NATIVE)
 
         monkeypatch.setattr(llm_core.httpx, "get", counting_get)
-        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is True
-        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is True
+        assert llm_core._fingerprint_is_lmstudio(self.URL) is True
+        assert llm_core._fingerprint_is_lmstudio(self.URL) is True
         assert calls["n"] == 1  # second call served from cache, no re-probe
 
 
@@ -381,7 +440,7 @@ class TestStreamOptionsExcluded:
         """stream_options must NOT be included in the payload sent to LM Studio."""
         captured = {}
         monkeypatch.setattr(llm_core, "_get_http_client", lambda: _make_fake_client(captured))
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
 
         chunks = []
         async for chunk in llm_core.stream_llm(
@@ -400,6 +459,7 @@ class TestStreamOptionsExcluded:
         """stream_options SHOULD be included for OpenAI-compatible endpoints."""
         captured = {}
         monkeypatch.setattr(llm_core, "_get_http_client", lambda: _make_fake_client(captured))
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: False)
 
         chunks = []
         async for chunk in llm_core.stream_llm(
@@ -421,19 +481,22 @@ class TestStreamOptionsExcluded:
 class TestEndpointResolverLmStudio:
     def test_build_chat_url_lmstudio(self, monkeypatch):
         import src.endpoint_resolver as er
-        # Skip DNS / Tailscale resolution
+        # Skip DNS / Tailscale resolution and the native-API probe.
         monkeypatch.setattr(er, "resolve_url", lambda url: url)
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
         result = er.build_chat_url("http://localhost:1234/v1")
         assert result == "http://localhost:1234/v1/chat/completions"
 
     def test_build_models_url_lmstudio(self, monkeypatch):
         import src.endpoint_resolver as er
         monkeypatch.setattr(er, "resolve_url", lambda url: url)
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
         result = er.build_models_url("http://localhost:1234/v1")
         assert result == "http://localhost:1234/v1/models"
 
     def test_build_chat_url_lan_lmstudio(self, monkeypatch):
         import src.endpoint_resolver as er
         monkeypatch.setattr(er, "resolve_url", lambda url: url)
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
         result = er.build_chat_url("http://192.168.1.5:1234/v1")
         assert result == "http://192.168.1.5:1234/v1/chat/completions"
