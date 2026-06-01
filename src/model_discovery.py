@@ -125,18 +125,11 @@ class ModelDiscovery:
 
     def _fingerprint_provider(self, host: str, port: int) -> Optional[str]:
         """Identify the server software via its native API, independent of port."""
+        from src.llm_core import _is_lmstudio_models_payload
         try:
             r = httpx.get(f"http://{host}:{port}/api/v1/models", timeout=1.5)
-            if r.is_success:
-                models = (r.json() or {}).get("models")
-                if (
-                    isinstance(models, list)
-                    and models
-                    and isinstance(models[0], dict)
-                    and "key" in models[0]
-                    and "architecture" in models[0]
-                ):
-                    return "lmstudio"
+            if r.is_success and _is_lmstudio_models_payload(r.json() or {}):
+                return "lmstudio"
         except Exception:
             pass
         return None

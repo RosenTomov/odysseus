@@ -212,6 +212,40 @@ def _parse_ollama_response(data: dict) -> str:
     return message.get("content") or data.get("response") or ""
 
 
+def _is_lmstudio_models_payload(data: dict) -> bool:
+    """True if a native /api/v1/models response has LM Studio's shape."""
+    models = (data or {}).get("models")
+    return (
+        isinstance(models, list)
+        and bool(models)
+        and isinstance(models[0], dict)
+        and "key" in models[0]
+        and "architecture" in models[0]
+    )
+
+_PROVIDER_FINGERPRINT_TTL = 60.0
+_provider_fingerprint_cache: Dict[tuple, tuple] = {}
+
+def _fingerprint_is_lmstudio(host: str, port: int) -> bool:
+    """Confirm LM Studio by probing its native /api/v1/models (short-TTL cached)."""
+    key = (host, port)
+    now = time.time()
+    cached = _provider_fingerprint_cache.get(key)
+    if cached is not None and cached[1] > now:
+        return cached[0] == "lmstudio"
+    try:
+        r = httpx.get(f"http://{host}:{port}/api/v1/models", timeout=1.0)
+    except Exception:
+        return False
+    try:
+        ok = r.is_success and _is_lmstudio_models_payload(r.json() or {})
+    except Exception:
+        ok = False
+    verdict = "lmstudio" if ok else ""
+    _provider_fingerprint_cache[key] = (verdict, now + _PROVIDER_FINGERPRINT_TTL)
+    return ok
+
+
 def _detect_provider(url: str) -> str:
     """Detect API provider from URL."""
     u = (url or "").lower()
@@ -224,7 +258,8 @@ def _detect_provider(url: str) -> str:
     if "groq.com" in u:
         return "groq"
     try:
-        if urlparse(url).port == 1234:
+        parsed = urlparse(url)
+        if parsed.port == 1234 and _fingerprint_is_lmstudio(parsed.hostname or "localhost", 1234):
             return "lmstudio"
     except Exception:
         pass
