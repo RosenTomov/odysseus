@@ -30,20 +30,35 @@ from src.model_discovery import ModelDiscovery
 # ════════════════════════════════════════════════════════════
 
 class TestDetectProviderLmStudio:
-    def test_localhost_port_1234_returns_lmstudio(self):
+    """Port 1234 is necessary but no longer sufficient: the result is confirmed
+    by the native-API fingerprint so other servers on 1234 aren't misdetected."""
+
+    def test_localhost_port_1234_fingerprint_confirms(self, monkeypatch):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
         assert llm_core._detect_provider("http://localhost:1234/v1/chat/completions") == "lmstudio"
 
-    def test_127_port_1234_returns_lmstudio(self):
+    def test_127_port_1234_fingerprint_confirms(self, monkeypatch):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
         assert llm_core._detect_provider("http://127.0.0.1:1234/v1/chat/completions") == "lmstudio"
 
-    def test_lan_ip_port_1234_returns_lmstudio(self):
+    def test_lan_ip_port_1234_fingerprint_confirms(self, monkeypatch):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
         assert llm_core._detect_provider("http://192.168.1.10:1234/v1/chat/completions") == "lmstudio"
 
-    def test_port_1234_no_path_returns_lmstudio(self):
+    def test_port_1234_no_path_fingerprint_confirms(self, monkeypatch):
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
         assert llm_core._detect_provider("http://localhost:1234") == "lmstudio"
 
+    def test_port_1234_non_lmstudio_server_not_misdetected(self, monkeypatch):
+        # vLLM / llama.cpp / a proxy on 1234: the fingerprint fails, so the
+        # result must NOT be lmstudio — otherwise stream_options is silently
+        # dropped and token-usage stats break for that server.
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: False)
+        assert llm_core._detect_provider("http://localhost:1234/v1/chat/completions") == "openai"
+
     def test_port_11234_does_not_return_lmstudio(self):
-        # Substring false-positive guard: 11234 contains "1234" but is not port 1234.
+        # Substring false-positive guard: 11234 contains "1234" but is not port
+        # 1234, so the probe never runs.
         result = llm_core._detect_provider("http://localhost:11234/v1/chat/completions")
         assert result != "lmstudio"
 
@@ -204,6 +219,70 @@ class TestFingerprintProvider:
 
 
 # ════════════════════════════════════════════════════════════
+# 4c. _is_lmstudio_models_payload — shared shape check
+# ════════════════════════════════════════════════════════════
+
+class TestIsLmStudioModelsPayload:
+    def test_lmstudio_shape_true(self):
+        payload = {"models": [{"key": "qwen3", "architecture": "qwen35"}]}
+        assert llm_core._is_lmstudio_models_payload(payload) is True
+
+    @pytest.mark.parametrize("payload", [
+        {},
+        {"models": []},
+        {"models": [{"id": "gpt-4o"}]},                       # OpenAI-compatible shape
+        {"models": [{"name": "llama3", "modified_at": "x"}]},  # Ollama /tags shape
+        {"data": [{"id": "gpt-4o"}]},                          # no "models" key
+    ])
+    def test_non_lmstudio_shapes_false(self, payload):
+        assert llm_core._is_lmstudio_models_payload(payload) is False
+
+
+# ════════════════════════════════════════════════════════════
+# 4d. _fingerprint_is_lmstudio — cached native-API probe
+# ════════════════════════════════════════════════════════════
+
+class TestFingerprintIsLmStudio:
+    LMSTUDIO_NATIVE = {"models": [{"key": "qwen3", "architecture": "qwen35"}]}
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        llm_core._provider_fingerprint_cache.clear()
+        yield
+        llm_core._provider_fingerprint_cache.clear()
+
+    def test_positive_shape_returns_true(self, monkeypatch):
+        monkeypatch.setattr(llm_core.httpx, "get",
+                            lambda url, timeout=None: _FakeResponse(self.LMSTUDIO_NATIVE))
+        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is True
+
+    def test_responding_non_lmstudio_returns_false(self, monkeypatch):
+        monkeypatch.setattr(llm_core.httpx, "get",
+                            lambda url, timeout=None: _FakeResponse({"data": [{"id": "x"}]}))
+        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is False
+
+    def test_probe_error_returns_false_and_not_cached(self, monkeypatch):
+        def boom(url, timeout=None):
+            raise OSError("connection refused")
+        monkeypatch.setattr(llm_core.httpx, "get", boom)
+        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is False
+        # A transient error must not be cached, so the next call re-probes.
+        assert ("localhost", 1234) not in llm_core._provider_fingerprint_cache
+
+    def test_result_is_cached_within_ttl(self, monkeypatch):
+        calls = {"n": 0}
+
+        def counting_get(url, timeout=None):
+            calls["n"] += 1
+            return _FakeResponse(self.LMSTUDIO_NATIVE)
+
+        monkeypatch.setattr(llm_core.httpx, "get", counting_get)
+        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is True
+        assert llm_core._fingerprint_is_lmstudio("localhost", 1234) is True
+        assert calls["n"] == 1  # second call served from cache, no re-probe
+
+
+# ════════════════════════════════════════════════════════════
 # 5. _get_hosts — LM_STUDIO_URL env var
 # ════════════════════════════════════════════════════════════
 
@@ -302,6 +381,7 @@ class TestStreamOptionsExcluded:
         """stream_options must NOT be included in the payload sent to LM Studio."""
         captured = {}
         monkeypatch.setattr(llm_core, "_get_http_client", lambda: _make_fake_client(captured))
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda host, port: True)
 
         chunks = []
         async for chunk in llm_core.stream_llm(
