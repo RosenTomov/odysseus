@@ -128,6 +128,82 @@ class TestModelDiscoveryPorts:
 
 
 # ════════════════════════════════════════════════════════════
+# 4b. _fingerprint_provider — native API identification
+# ════════════════════════════════════════════════════════════
+
+class _FakeResponse:
+    def __init__(self, payload, ok=True):
+        self._payload = payload
+        self.is_success = ok
+
+    def json(self):
+        return self._payload
+
+
+class TestFingerprintProvider:
+    LMSTUDIO_NATIVE = {
+        "models": [
+            {"type": "llm", "key": "qwen3.6-27b", "architecture": "qwen35",
+             "quantization": {"name": "Q5_K_XL"}, "format": "gguf"},
+        ]
+    }
+
+    def test_lmstudio_native_format_detected(self, monkeypatch):
+        discovery = ModelDiscovery(default_host="localhost")
+        monkeypatch.setattr(
+            "src.model_discovery.httpx.get",
+            lambda url, timeout=None: _FakeResponse(self.LMSTUDIO_NATIVE),
+        )
+        assert discovery._fingerprint_provider("localhost", 1234) == "lmstudio"
+
+    def test_lmstudio_detected_on_nonstandard_port(self, monkeypatch):
+        discovery = ModelDiscovery(default_host="localhost")
+        monkeypatch.setattr(
+            "src.model_discovery.httpx.get",
+            lambda url, timeout=None: _FakeResponse(self.LMSTUDIO_NATIVE),
+        )
+        assert discovery._fingerprint_provider("localhost", 8080) == "lmstudio"
+
+    def test_openai_compatible_server_not_lmstudio(self, monkeypatch):
+        discovery = ModelDiscovery(default_host="localhost")
+        monkeypatch.setattr(
+            "src.model_discovery.httpx.get",
+            lambda url, timeout=None: _FakeResponse({"data": [{"id": "gpt-4o"}]}, ok=False),
+        )
+        assert discovery._fingerprint_provider("localhost", 8000) is None
+
+    def test_ollama_tags_shape_not_lmstudio(self, monkeypatch):
+        discovery = ModelDiscovery(default_host="localhost")
+        ollama_shape = {"models": [{"name": "llama3", "modified_at": "x", "size": 1}]}
+        monkeypatch.setattr(
+            "src.model_discovery.httpx.get",
+            lambda url, timeout=None: _FakeResponse(ollama_shape),
+        )
+        assert discovery._fingerprint_provider("localhost", 11434) is None
+
+    def test_unreachable_returns_none(self, monkeypatch):
+        discovery = ModelDiscovery(default_host="localhost")
+        def boom(url, timeout=None):
+            raise OSError("connection refused")
+        monkeypatch.setattr("src.model_discovery.httpx.get", boom)
+        assert discovery._fingerprint_provider("localhost", 1234) is None
+
+    def test_check_port_attaches_provider(self, monkeypatch):
+        discovery = ModelDiscovery(default_host="localhost")
+
+        def fake_get(url, timeout=None):
+            if url.endswith("/api/v1/models"):
+                return _FakeResponse(self.LMSTUDIO_NATIVE)
+            return _FakeResponse({"data": [{"id": "qwen3.6-27b"}]})
+
+        monkeypatch.setattr("src.model_discovery.httpx.get", fake_get)
+        result = discovery._check_port("localhost", 1234)
+        assert result is not None
+        assert result["provider"] == "lmstudio"
+        assert result["models"] == ["qwen3.6-27b"]
+
+
+# ════════════════════════════════════════════════════════════
 # 5. _get_hosts — LM_STUDIO_URL env var
 # ════════════════════════════════════════════════════════════
 
