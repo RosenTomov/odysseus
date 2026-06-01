@@ -223,6 +223,11 @@ def _detect_provider(url: str) -> str:
         return "openrouter"
     if "groq.com" in u:
         return "groq"
+    try:
+        if urlparse(url).port == 1234:
+            return "lmstudio"
+    except Exception:
+        pass
     return "openai"
 
 
@@ -251,9 +256,10 @@ def _provider_label(url: str) -> str:
     if "together.xyz" in u or "together.ai" in u: return "Together"
     if "fireworks.ai" in u: return "Fireworks"
     if "ollama" in u or ":11434" in u: return "Ollama"
+    if (":1234/" in u or u.endswith(":1234")) and urlparse(url).port == 1234:
+        return "LM Studio"
     if "localhost" in u or "127.0.0.1" in u: return "local endpoint"
     try:
-        from urllib.parse import urlparse
         host = urlparse(url).hostname or "provider"
         return host
     except Exception:
@@ -784,7 +790,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
             "temperature": temperature,
             "stream": True,
         }
-        if provider not in {"openrouter", "groq"}:
+        if provider not in {"openrouter", "groq", "lmstudio"}:
             payload["stream_options"] = {"include_usage": True}
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"

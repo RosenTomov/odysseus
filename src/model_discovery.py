@@ -83,6 +83,18 @@ class ModelDiscovery:
                 return
             out.append(host)
 
+        def _append_env_hosts(out: List[str]) -> None:
+            """Add hosts from provider-specific env vars."""
+            for env_name in ("OLLAMA_BASE_URL", "OLLAMA_URL", "LM_STUDIO_URL"):
+                raw = os.getenv(env_name, "").strip()
+                if not raw:
+                    continue
+                try:
+                    parsed = urlparse(raw if "://" in raw else "http://" + raw)
+                    _append_host(out, parsed.hostname or "")
+                except Exception:
+                    pass
+
         # Manual override takes priority
         extra = os.getenv("LLM_HOSTS", "").strip()
         if extra:
@@ -91,6 +103,7 @@ class ModelDiscovery:
             if self.default_host not in hosts:
                 hosts.insert(0, self.default_host)
             _append_host(hosts, "host.docker.internal")
+            _append_env_hosts(hosts)
             return hosts
 
         # Try Tailscale discovery
@@ -100,21 +113,14 @@ class ModelDiscovery:
             if self.default_host not in ts_hosts:
                 ts_hosts.insert(0, self.default_host)
             _append_host(ts_hosts, "host.docker.internal")
+            _append_env_hosts(ts_hosts)
             return ts_hosts
 
         hosts = [self.default_host]
         # Docker desktop/Linux compose maps this to the host machine. That is
         # the common "I started Ollama normally on this computer" case.
         _append_host(hosts, "host.docker.internal")
-        for env_name in ("OLLAMA_BASE_URL", "OLLAMA_URL"):
-            raw = os.getenv(env_name, "").strip()
-            if not raw:
-                continue
-            try:
-                parsed = urlparse(raw if "://" in raw else "http://" + raw)
-                _append_host(hosts, parsed.hostname or "")
-            except Exception:
-                pass
+        _append_env_hosts(hosts)
         return hosts
 
     def _check_port(self, host: str, port: int) -> Optional[Dict[str, Any]]:
@@ -145,9 +151,9 @@ class ModelDiscovery:
 
         logger.info(f"Scanning {len(hosts)} hosts for models: {hosts}")
 
-        # Build list of (host, port) to check. 8000-8020 catches vLLM,
-        # llama.cpp, SGLang, and Cookbook serves; 11434 catches Ollama.
-        ports = list(range(8000, 8021)) + [11434]
+        # Well-known ports: 8000-8020 (vLLM, llama.cpp, SGLang, Cookbook),
+        # 1234 (LM Studio), 11434 (Ollama)
+        ports = list(range(8000, 8021)) + [1234, 11434]
         targets = [(h, p) for h in hosts for p in ports]
 
         seen_models = set()  # dedupe by (port, model_ids) to avoid same machine via different IPs
