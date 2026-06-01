@@ -291,8 +291,11 @@ def _provider_label(url: str) -> str:
     if "together.xyz" in u or "together.ai" in u: return "Together"
     if "fireworks.ai" in u: return "Fireworks"
     if "ollama" in u or ":11434" in u: return "Ollama"
-    if (":1234/" in u or u.endswith(":1234")) and urlparse(url).port == 1234:
-        return "LM Studio"
+    try:
+        if urlparse(url).port == 1234:
+            return "LM Studio"
+    except (ValueError, TypeError):
+        pass
     if "localhost" in u or "127.0.0.1" in u: return "local endpoint"
     try:
         host = urlparse(url).hostname or "provider"
