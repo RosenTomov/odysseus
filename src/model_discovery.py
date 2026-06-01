@@ -74,9 +74,13 @@ class ModelDiscovery:
         self.default_host = default_host
         self.openai_api_key = openai_api_key
         self.openai_compat_path = "/v1/chat/completions"
+        # Custom ports from env vars, merged into the scan list by discover_models.
+        self._extra_ports: set = set()
 
     def _get_hosts(self) -> List[str]:
         """Get all hosts to scan, using env override, Tailscale, or default."""
+        self._extra_ports = set()
+
         def _append_host(out: List[str], host: str) -> None:
             host = (host or "").strip()
             if not host or host in out:
@@ -84,7 +88,7 @@ class ModelDiscovery:
             out.append(host)
 
         def _append_env_hosts(out: List[str]) -> None:
-            """Add hosts from provider-specific env vars."""
+            """Add hosts (and any custom ports) from provider-specific env vars."""
             for env_name in ("OLLAMA_BASE_URL", "OLLAMA_URL", "LM_STUDIO_URL"):
                 raw = os.getenv(env_name, "").strip()
                 if not raw:
@@ -92,6 +96,8 @@ class ModelDiscovery:
                 try:
                     parsed = urlparse(raw if "://" in raw else "http://" + raw)
                     _append_host(out, parsed.hostname or "")
+                    if parsed.port:
+                        self._extra_ports.add(parsed.port)
                 except Exception:
                     pass
 
@@ -166,6 +172,7 @@ class ModelDiscovery:
         # Well-known ports: 8000-8020 (vLLM, llama.cpp, SGLang, Cookbook),
         # 1234 (LM Studio), 11434 (Ollama)
         ports = list(range(8000, 8021)) + [1234, 11434]
+        ports += [p for p in sorted(self._extra_ports) if p not in ports]
         targets = [(h, p) for h in hosts for p in ports]
 
         seen_models = set()  # dedupe by (port, model_ids) to avoid same machine via different IPs
