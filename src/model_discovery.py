@@ -123,6 +123,24 @@ class ModelDiscovery:
         _append_env_hosts(hosts)
         return hosts
 
+    def _fingerprint_provider(self, host: str, port: int) -> Optional[str]:
+        """Identify the server software via its native API, independent of port."""
+        try:
+            r = httpx.get(f"http://{host}:{port}/api/v1/models", timeout=1.5)
+            if r.is_success:
+                models = (r.json() or {}).get("models")
+                if (
+                    isinstance(models, list)
+                    and models
+                    and isinstance(models[0], dict)
+                    and "key" in models[0]
+                    and "architecture" in models[0]
+                ):
+                    return "lmstudio"
+        except Exception:
+            pass
+        return None
+
     def _check_port(self, host: str, port: int) -> Optional[Dict[str, Any]]:
         """Check a single host:port for models."""
         base = f"http://{host}:{port}/v1"
@@ -138,7 +156,8 @@ class ModelDiscovery:
                     "port": port,
                     "url": f"http://{host}:{port}{self.openai_compat_path}",
                     "models": ids,
-                    "models_display": [i.lstrip("/") for i in ids]
+                    "models_display": [i.lstrip("/") for i in ids],
+                    "provider": self._fingerprint_provider(host, port),
                 }
         except Exception:
             pass
