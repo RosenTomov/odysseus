@@ -391,6 +391,19 @@ class TestLmStudioSupportsVision:
         self._serve(monkeypatch, self.PAYLOAD)
         assert llm_core.lmstudio_supports_vision(self.URL, "") is None
 
+    def test_remote_endpoint_never_probed(self, monkeypatch):
+        calls = {"n": 0}
+
+        def tracking_get(url, timeout=None):
+            calls["n"] += 1
+            return _FakeResponse(self.PAYLOAD)
+
+        monkeypatch.setattr(llm_core.httpx, "get", tracking_get)
+        # A cloud provider host must short-circuit to None with no network probe.
+        assert llm_core.lmstudio_supports_vision(
+            "https://api.openai.com/v1/chat/completions", "gpt-4o") is None
+        assert calls["n"] == 0
+
 
 class TestModelSupportsVision:
     """Endpoint-aware vision check: API capability wins, name heuristic is the fallback."""

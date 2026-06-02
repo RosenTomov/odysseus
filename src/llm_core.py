@@ -329,6 +329,9 @@ def lmstudio_supports_vision(url: str, model: str) -> Optional[bool]:
     endpoint isn't LM Studio or doesn't report it (so callers fall back)."""
     if not model:
         return None
+    # Never probe a remote provider; LM Studio is always a local/LAN host.
+    if not _is_local_host(urlparse(url).hostname):
+        return None
     models = _probe_lmstudio_models(url)
     if not models:
         return None
