@@ -5,6 +5,7 @@ import time
 import json
 import logging
 import hashlib
+import ipaddress
 import threading
 from fastapi import HTTPException
 from typing import Optional, Dict, List
@@ -276,6 +277,68 @@ def _parse_ollama_response(data: dict) -> str:
     return message.get("content") or data.get("response") or ""
 
 
+def _is_lmstudio_models_payload(data: dict) -> bool:
+    """True if a native /api/v1/models response has LM Studio's shape."""
+    models = (data or {}).get("models")
+    return (
+        isinstance(models, list)
+        and bool(models)
+        and isinstance(models[0], dict)
+        and "key" in models[0]
+        and "architecture" in models[0]
+    )
+
+def _is_local_host(host: Optional[str]) -> bool:
+    """True for loopback/LAN/Tailscale hosts (never public domains)."""
+    host = (host or "").lower()
+    if not host:
+        return False
+    if host in {"localhost", "host.docker.internal"} or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host
+    if ip.is_loopback or ip.is_private or ip.is_link_local:
+        return True
+    return ip in ipaddress.ip_network("100.64.0.0/10")
+
+
+_PROVIDER_FINGERPRINT_TTL = 60.0
+# (host, port) -> (models_list | None, expiry); list = LM Studio, None = not LM Studio.
+_lmstudio_models_cache: Dict[tuple, tuple] = {}
+
+
+def _probe_lmstudio_models(url: str) -> Optional[list]:
+    """Return LM Studio's native /api/v1/models list, or None when the endpoint
+    isn't LM Studio or is unreachable (short-TTL cached; transient errors uncached)."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    key = (host, parsed.port)
+    now = time.time()
+    cached = _lmstudio_models_cache.get(key)
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    authority = host if parsed.port is None else f"{host}:{parsed.port}"
+    probe_url = f"{parsed.scheme or 'http'}://{authority}/api/v1/models"
+    try:
+        r = httpx.get(probe_url, timeout=1.0)
+    except Exception:
+        return None
+    try:
+        data = r.json() if r.is_success else {}
+    except Exception:
+        data = {}
+    models = data.get("models") if _is_lmstudio_models_payload(data) else None
+    _lmstudio_models_cache[key] = (models, now + _PROVIDER_FINGERPRINT_TTL)
+    return models
+
+
+def _fingerprint_is_lmstudio(url: str) -> bool:
+    """Confirm LM Studio by probing its native /api/v1/models (short-TTL cached)."""
+    return _probe_lmstudio_models(url) is not None
+
+
 def _host_match(url: str, *domains: str) -> bool:
     """Return True if url's hostname equals any of `domains` or is a subdomain of one.
 
@@ -314,6 +377,11 @@ def _detect_provider(url: str) -> str:
         return "openrouter"
     if _host_match(url, "groq.com"):
         return "groq"
+    try:
+        if _is_local_host(urlparse(url).hostname) and _fingerprint_is_lmstudio(url):
+            return "lmstudio"
+    except Exception:
+        pass
     return "openai"
 
 
@@ -343,6 +411,8 @@ def _provider_label(url: str) -> str:
     if _host_match(url, "together.xyz", "together.ai"): return "Together"
     if _host_match(url, "fireworks.ai"): return "Fireworks"
     if _is_ollama_native_url(url): return "Ollama"
+    if _detect_provider(url) == "lmstudio":
+        return "LM Studio"
     try:
         host = (urlparse(url).hostname or "").lower()
     except Exception:
@@ -832,7 +902,7 @@ async def llm_call_async(
     prompt_type: Optional[str] = None
 ) -> str:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
-    provider = _detect_provider(url)
+    provider = await asyncio.to_thread(_detect_provider, url)
     messages_copy = _sanitize_llm_messages(messages)
 
     # Consolidate multiple system messages into one at the start.
@@ -940,7 +1010,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
       - event: error                       — errors
       - data: [DONE]                       — end of stream
     """
-    provider = _detect_provider(url)
+    provider = await asyncio.to_thread(_detect_provider, url)
     messages_copy = _sanitize_llm_messages(messages)
 
     # Consolidate multiple system messages into one at the start.
@@ -980,7 +1050,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
         }
         if _restricts_temperature(model):
             payload.pop("temperature", None)
-        if provider not in {"openrouter", "groq"}:
+        if provider not in {"openrouter", "groq", "lmstudio"}:
             payload["stream_options"] = {"include_usage": True}
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
