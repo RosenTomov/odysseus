@@ -290,9 +290,9 @@ class TestFingerprintIsLmStudio:
 
     @pytest.fixture(autouse=True)
     def _clear_cache(self):
-        llm_core._provider_fingerprint_cache.clear()
+        llm_core._lmstudio_models_cache.clear()
         yield
-        llm_core._provider_fingerprint_cache.clear()
+        llm_core._lmstudio_models_cache.clear()
 
     URL = "http://localhost:5000/v1/chat/completions"
 
@@ -326,7 +326,7 @@ class TestFingerprintIsLmStudio:
         monkeypatch.setattr(llm_core.httpx, "get", boom)
         assert llm_core._fingerprint_is_lmstudio(self.URL) is False
         # A transient error must not be cached, so the next call re-probes.
-        assert ("localhost", 5000) not in llm_core._provider_fingerprint_cache
+        assert ("localhost", 5000) not in llm_core._lmstudio_models_cache
 
     def test_result_is_cached_within_ttl(self, monkeypatch):
         calls = {"n": 0}
@@ -339,6 +339,82 @@ class TestFingerprintIsLmStudio:
         assert llm_core._fingerprint_is_lmstudio(self.URL) is True
         assert llm_core._fingerprint_is_lmstudio(self.URL) is True
         assert calls["n"] == 1  # second call served from cache, no re-probe
+
+
+# ════════════════════════════════════════════════════════════
+# 4b. lmstudio_supports_vision / model_supports_vision
+# ════════════════════════════════════════════════════════════
+
+class TestLmStudioSupportsVision:
+    # A vision finetune whose NAME has no vision keyword — the case the
+    # name-based heuristic gets wrong (issue this PR fixes).
+    PAYLOAD = {"models": [
+        {"key": "qwen3.6-27b-custom-finetune", "architecture": "qwen35",
+         "capabilities": {"vision": True, "trained_for_tool_use": True}},
+        {"key": "text-only-llm", "architecture": "qwen35",
+         "capabilities": {"vision": False}},
+        {"key": "no-caps-model", "architecture": "qwen35"},
+    ]}
+    URL = "http://localhost:1234/v1/chat/completions"
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        llm_core._lmstudio_models_cache.clear()
+        yield
+        llm_core._lmstudio_models_cache.clear()
+
+    def _serve(self, monkeypatch, payload):
+        monkeypatch.setattr(llm_core.httpx, "get",
+                            lambda url, timeout=None: _FakeResponse(payload))
+
+    def test_vision_true_from_capabilities(self, monkeypatch):
+        self._serve(monkeypatch, self.PAYLOAD)
+        assert llm_core.lmstudio_supports_vision(self.URL, "qwen3.6-27b-custom-finetune") is True
+
+    def test_vision_false_from_capabilities(self, monkeypatch):
+        self._serve(monkeypatch, self.PAYLOAD)
+        assert llm_core.lmstudio_supports_vision(self.URL, "text-only-llm") is False
+
+    def test_model_without_capabilities_returns_none(self, monkeypatch):
+        self._serve(monkeypatch, self.PAYLOAD)
+        assert llm_core.lmstudio_supports_vision(self.URL, "no-caps-model") is None
+
+    def test_unknown_model_returns_none(self, monkeypatch):
+        self._serve(monkeypatch, self.PAYLOAD)
+        assert llm_core.lmstudio_supports_vision(self.URL, "not-listed") is None
+
+    def test_non_lmstudio_endpoint_returns_none(self, monkeypatch):
+        self._serve(monkeypatch, {"data": [{"id": "gpt-4o"}]})
+        assert llm_core.lmstudio_supports_vision(self.URL, "gpt-4o") is None
+
+    def test_empty_model_returns_none(self, monkeypatch):
+        self._serve(monkeypatch, self.PAYLOAD)
+        assert llm_core.lmstudio_supports_vision(self.URL, "") is None
+
+
+class TestModelSupportsVision:
+    """Endpoint-aware vision check: API capability wins, name heuristic is the fallback."""
+
+    def test_api_capability_overrides_name_heuristic(self, monkeypatch):
+        from src import chat_helpers
+        # Name has no vision keyword, but the endpoint advertises vision=True.
+        monkeypatch.setattr(chat_helpers, "is_vision_model", lambda n: False)
+        monkeypatch.setattr(llm_core, "lmstudio_supports_vision", lambda url, m: True)
+        assert chat_helpers.model_supports_vision("qwen3.6-27b-finetune",
+                                                  "http://localhost:1234/v1/chat/completions") is True
+
+    def test_falls_back_to_name_when_no_endpoint(self):
+        from src import chat_helpers
+        # No endpoint URL → pure name heuristic.
+        assert chat_helpers.model_supports_vision("llava-1.6", "") is True
+        assert chat_helpers.model_supports_vision("mistral-7b", "") is False
+
+    def test_falls_back_to_name_when_endpoint_unknown(self, monkeypatch):
+        from src import chat_helpers
+        # Endpoint doesn't advertise (None) → name heuristic decides.
+        monkeypatch.setattr(llm_core, "lmstudio_supports_vision", lambda url, m: None)
+        assert chat_helpers.model_supports_vision("qwen2-vl-7b", "http://host/v1") is True
+        assert chat_helpers.model_supports_vision("plain-llm", "http://host/v1") is False
 
 
 # ════════════════════════════════════════════════════════════
