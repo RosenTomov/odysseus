@@ -53,6 +53,21 @@ def is_vision_model(model_name: str) -> bool:
     return bool(_VISION_VL_RE.search(m))
 
 
+def model_supports_vision(model_name: str, endpoint_url: str = "") -> bool:
+    """Whether a model accepts images, using the endpoint's reported
+    capability when available (LM Studio) and falling back to name-based
+    detection otherwise."""
+    if endpoint_url:
+        try:
+            from src.llm_core import lmstudio_supports_vision
+            advertised = lmstudio_supports_vision(endpoint_url, model_name or "")
+        except Exception:
+            advertised = None
+        if advertised is not None:
+            return advertised
+    return is_vision_model(model_name)
+
+
 def validate_message(message: str) -> str:
     """Validate message input."""
     if not message:
