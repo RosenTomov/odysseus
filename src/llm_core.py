@@ -290,29 +290,59 @@ def _is_local_host(host: Optional[str]) -> bool:
 
 
 _PROVIDER_FINGERPRINT_TTL = 60.0
-_provider_fingerprint_cache: Dict[tuple, tuple] = {}
+# (host, port) -> (models_list | None, expiry); list = LM Studio, None = not LM Studio.
+_lmstudio_models_cache: Dict[tuple, tuple] = {}
 
-def _fingerprint_is_lmstudio(url: str) -> bool:
-    """Confirm LM Studio by probing its native /api/v1/models (short-TTL cached)."""
+
+def _probe_lmstudio_models(url: str) -> Optional[list]:
+    """Return LM Studio's native /api/v1/models list, or None when the endpoint
+    isn't LM Studio or is unreachable (short-TTL cached; transient errors uncached)."""
     parsed = urlparse(url)
     host = parsed.hostname or ""
     key = (host, parsed.port)
     now = time.time()
-    cached = _provider_fingerprint_cache.get(key)
+    cached = _lmstudio_models_cache.get(key)
     if cached is not None and cached[1] > now:
-        return cached[0] == "lmstudio"
+        return cached[0]
     authority = host if parsed.port is None else f"{host}:{parsed.port}"
     probe_url = f"{parsed.scheme or 'http'}://{authority}/api/v1/models"
     try:
         r = httpx.get(probe_url, timeout=1.0)
     except Exception:
-        return False
+        return None
     try:
-        ok = r.is_success and _is_lmstudio_models_payload(r.json() or {})
+        data = r.json() if r.is_success else {}
     except Exception:
-        ok = False
-    _provider_fingerprint_cache[key] = ("lmstudio" if ok else "", now + _PROVIDER_FINGERPRINT_TTL)
-    return ok
+        data = {}
+    models = data.get("models") if _is_lmstudio_models_payload(data) else None
+    _lmstudio_models_cache[key] = (models, now + _PROVIDER_FINGERPRINT_TTL)
+    return models
+
+
+def _fingerprint_is_lmstudio(url: str) -> bool:
+    """Confirm LM Studio by probing its native /api/v1/models (short-TTL cached)."""
+    return _probe_lmstudio_models(url) is not None
+
+
+def lmstudio_supports_vision(url: str, model: str) -> Optional[bool]:
+    """Read `model`'s capabilities.vision flag from LM Studio, or None when the
+    endpoint isn't LM Studio or doesn't report it (so callers fall back)."""
+    if not model:
+        return None
+    models = _probe_lmstudio_models(url)
+    if not models:
+        return None
+    want = model.strip().lower()
+    for m in models:
+        if not isinstance(m, dict):
+            continue
+        names = {str(m.get("key", "")).lower(), str(m.get("display_name", "")).lower()}
+        if want in names:
+            caps = m.get("capabilities")
+            if isinstance(caps, dict) and "vision" in caps:
+                return bool(caps.get("vision"))
+            return None
+    return None
 
 
 def _host_match(url: str, *domains: str) -> bool:
