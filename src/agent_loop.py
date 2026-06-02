@@ -1314,6 +1314,30 @@ async def _run_verifier_subagent(
     return [r.strip() for r in reasons.split(";") if r.strip()]
 
 
+def _empty_response_fallback(
+    full_response: str,
+    round_reasoning: str,
+    tool_events: list,
+) -> tuple:
+    """Return (final_response, sse_chunk_or_none) for the end-of-loop empty-response guard.
+
+    When a thinking model routes all tokens to reasoning_content (leaving
+    content=""), full_response is empty but round_reasoning has content.
+    The reasoning was already streamed as {thinking:true} chunks — do not
+    re-emit it as a normal delta.  Just persist it and yield nothing.
+
+    Returns:
+        (final_response: str, chunk: str | None)
+            chunk is the SSE string to yield, or None if nothing should be emitted.
+    """
+    if full_response.strip() or tool_events:
+        return full_response, None
+    if round_reasoning.strip():
+        return round_reasoning, None
+    _error_msg = "The model returned an empty response. Please try again or switch to a different model."
+    return _error_msg, f'data: {json.dumps({"delta": _error_msg})}\n\n'
+
+
 async def stream_agent_loop(
     endpoint_url: str,
     model: str,
@@ -1487,13 +1511,23 @@ async def stream_agent_loop(
     _t3 = time.time()
     try:
         from src.context_compactor import trim_for_context
-        from src.context_budget import compute_input_token_budget
+        from src.context_budget import compute_input_token_budget, DEFAULT_HARD_MAX
         from src.settings import is_setting_overridden
 
         soft_budget = int(get_setting("agent_input_token_budget", 6000) or 0)
         if soft_budget > 0:
             before_trim_tokens = estimate_tokens(messages)
             reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
+            # Honour the configurable ceiling for the auto-derived budget path.
+            # No-op when the user has an explicit `agent_input_token_budget`
+            # (that branch ignores hard_max). Falls back to DEFAULT_HARD_MAX
+            # on missing/malformed values so misconfig can't zero the budget.
+            try:
+                hard_max = int(get_setting("agent_input_token_hard_max", DEFAULT_HARD_MAX) or DEFAULT_HARD_MAX)
+            except (TypeError, ValueError):
+                hard_max = DEFAULT_HARD_MAX
+            if hard_max <= 0:
+                hard_max = DEFAULT_HARD_MAX
             # Scale the default budget to the model's context window so long-context
             # models aren't silently capped at 6000; an explicit user setting is
             # still honoured (clamped to the window). (#1170)
@@ -1501,6 +1535,7 @@ async def stream_agent_loop(
                 soft_budget,
                 context_length,
                 is_setting_overridden("agent_input_token_budget"),
+                hard_max=hard_max,
             )
             trimmed_messages = trim_for_context(
                 messages,
@@ -2214,10 +2249,11 @@ async def stream_agent_loop(
 
     # If the response is completely empty and no tools were executed,
     # yield a fallback message so the user is not left hanging.
-    if not full_response.strip() and not tool_events:
-        _error_msg = "The model returned an empty response. Please try again or switch to a different model."
-        yield f'data: {json.dumps({"delta": _error_msg})}\n\n'
-        full_response = _error_msg
+    full_response, _fallback_chunk = _empty_response_fallback(
+        full_response, round_reasoning, tool_events
+    )
+    if _fallback_chunk:
+        yield _fallback_chunk
 
     # --- Final metrics ---
     total_duration = time.time() - total_start
