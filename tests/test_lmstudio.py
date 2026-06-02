@@ -2,6 +2,7 @@
 import os
 import sys
 import types
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -235,68 +236,80 @@ class TestFingerprintIsLmStudio:
 # 7. stream_llm — stream_options excluded for lmstudio
 # ════════════════════════════════════════════════════════════
 
-def _make_fake_client(captured: dict):
-    """Return a fake AsyncClient whose .stream() is a proper async context manager."""
-    from contextlib import asynccontextmanager
+# Plain class-based fakes (no @asynccontextmanager async generator), matching the
+# other streaming tests in this suite (e.g. test_llm_core_streaming.py). The
+# stream is driven via asyncio.run so the loop, its async generators, and the
+# default executor used by stream_llm's `to_thread` are torn down deterministically.
 
-    class FakeClient:
-        is_closed = False
+class _FakeStreamResp:
+    status_code = 200
 
-        @asynccontextmanager
-        async def stream(self, method, url, **kwargs):
-            captured["payload"] = kwargs.get("json", {})
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"hi"}}]}'
+        yield "data: [DONE]"
 
-            class FakeResponse:
-                status_code = 200
+    async def aread(self):
+        return b""
 
-                async def aiter_lines(self):
-                    yield 'data: {"choices":[{"delta":{"content":"hi"}}]}'
-                    yield "data: [DONE]"
 
-                async def aread(self):
-                    return b""
+class _FakeStreamCtx:
+    def __init__(self, captured, kwargs):
+        self._captured = captured
+        self._kwargs = kwargs
 
-            yield FakeResponse()
+    async def __aenter__(self):
+        self._captured["payload"] = self._kwargs.get("json", {})
+        return _FakeStreamResp()
 
-    return FakeClient()
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeStreamClient:
+    is_closed = False
+
+    def __init__(self, captured):
+        self._captured = captured
+
+    def stream(self, method, url, **kwargs):
+        return _FakeStreamCtx(self._captured, kwargs)
+
+
+def _run_stream(monkeypatch, url, model, *, is_lmstudio):
+    """Drive stream_llm against the fake client and return the captured payload."""
+    captured = {}
+    monkeypatch.setattr(llm_core, "_get_http_client", lambda: _FakeStreamClient(captured))
+    monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: is_lmstudio)
+    monkeypatch.setattr(llm_core, "_is_host_dead", lambda u: False)
+    monkeypatch.setattr(llm_core, "note_model_activity", lambda *a, **k: None)
+    monkeypatch.setattr(llm_core, "_clear_host_dead", lambda *a, **k: None)
+
+    async def run():
+        async for _ in llm_core.stream_llm(url, model, [{"role": "user", "content": "hi"}]):
+            pass
+
+    asyncio.run(run())
+    return captured.get("payload", {})
 
 
 class TestStreamOptionsExcluded:
-    @pytest.mark.asyncio
-    async def test_stream_options_absent_for_lmstudio(self, monkeypatch):
+    def test_stream_options_absent_for_lmstudio(self, monkeypatch):
         """stream_options must NOT be included in the payload sent to LM Studio."""
-        captured = {}
-        monkeypatch.setattr(llm_core, "_get_http_client", lambda: _make_fake_client(captured))
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
-
-        chunks = []
-        async for chunk in llm_core.stream_llm(
-            "http://localhost:1234/v1/chat/completions",
-            "lmstudio-model",
-            [{"role": "user", "content": "hi"}],
-        ):
-            chunks.append(chunk)
-
-        assert "stream_options" not in captured.get("payload", {}), (
-            f"stream_options was unexpectedly present in payload: {captured.get('payload')}"
+        payload = _run_stream(
+            monkeypatch, "http://localhost:1234/v1/chat/completions",
+            "lmstudio-model", is_lmstudio=True,
+        )
+        assert "stream_options" not in payload, (
+            f"stream_options was unexpectedly present in payload: {payload}"
         )
 
-    @pytest.mark.asyncio
-    async def test_stream_options_present_for_openai(self, monkeypatch):
+    def test_stream_options_present_for_openai(self, monkeypatch):
         """stream_options SHOULD be included for OpenAI-compatible endpoints."""
-        captured = {}
-        monkeypatch.setattr(llm_core, "_get_http_client", lambda: _make_fake_client(captured))
-        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: False)
-
-        chunks = []
-        async for chunk in llm_core.stream_llm(
-            "http://localhost:8080/v1/chat/completions",
-            "some-model",
-            [{"role": "user", "content": "hi"}],
-        ):
-            chunks.append(chunk)
-
-        assert "stream_options" in captured.get("payload", {}), (
+        payload = _run_stream(
+            monkeypatch, "http://localhost:8080/v1/chat/completions",
+            "some-model", is_lmstudio=False,
+        )
+        assert "stream_options" in payload, (
             "stream_options should be present for non-excluded providers"
         )
 
