@@ -5996,7 +5996,8 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       flex-direction: column;
       max-height: 60vh;
     }
-    .search-popup input#search-input {
+    .search-popup input#search-input,
+    .search-popup input#cmd-palette-input {
       width: 100%;
       background: transparent;
       border: none;
@@ -6008,7 +6009,8 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       padding: 14px 16px;
       box-sizing: border-box;
     }
-    .search-popup input#search-input::placeholder {
+    .search-popup input#search-input::placeholder,
+    .search-popup input#cmd-palette-input::placeholder {
       color: color-mix(in srgb, var(--fg) 30%, transparent);
     }
     .search-results {
@@ -6092,36 +6094,18 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       .search-footer-hint { display: none; }
     }
     /* ── Command palette (Search Everywhere, double-Shift) ──
-       Layer survey: .search-overlay 300 / base .modal 260 / ui.js _promote
-       bumps visible modals from 1000+ / toasts & spinners up to 99999.
-       The palette pins 50000: above every modal, deliberately BELOW toasts
-       so a perform()-failure toast stays visible while it is open. The
-       overlay is NOT .modal (dodges the _promote auto-bump). */
+       Reuses the .search-overlay/.search-popup/.search-result-item look;
+       only palette-specific bits live below. Layer survey: .search-overlay
+       300 / base .modal 260 / ui.js _promote bumps visible modals from
+       1000+ / toasts & spinners up to 99999. The palette pins 50000: above
+       every modal, deliberately BELOW toasts so a perform()-failure toast
+       stays visible while it is open. The overlay is NOT .modal (dodges
+       the _promote auto-bump). */
     .cmd-palette-overlay {
-      position: fixed;
-      top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0, 0, 0, 0.6);
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
-      padding-top: 15vh;
       z-index: 50000;
-      backdrop-filter: blur(6px);
     }
     .cmd-palette-overlay[hidden] { display: none; }
     body.cmd-palette-scroll-lock { overflow: hidden; }
-    .cmd-palette-popup {
-      width: 520px;
-      max-width: 90vw;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      max-height: 60vh;
-    }
     .cmd-palette-tabs {
       display: flex;
       align-items: center;
@@ -6163,41 +6147,6 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       border-bottom-width: 2px;
       border-radius: 3px;
       background: color-mix(in srgb, var(--fg) 6%, transparent);
-    }
-    .cmd-palette-popup input#cmd-palette-input {
-      width: 100%;
-      background: transparent;
-      border: none;
-      border-bottom: 1px solid var(--border);
-      outline: none;
-      color: var(--fg);
-      font-size: 16px;
-      font-family: 'Fira Code', monospace;
-      padding: 14px 16px;
-      box-sizing: border-box;
-    }
-    .cmd-palette-popup input#cmd-palette-input::placeholder {
-      color: color-mix(in srgb, var(--fg) 30%, transparent);
-    }
-    .cmd-palette-list {
-      overflow-y: auto;
-      flex: 1;
-      padding: 4px;
-    }
-    .cmd-palette-item {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-      padding: 8px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: background 0.1s;
-      font-size: 13px;
-      color: var(--fg);
-    }
-    .cmd-palette-item:hover,
-    .cmd-palette-item.active {
-      background: color-mix(in srgb, var(--accent, #e8a830) 12%, transparent);
     }
     .cmd-palette-empty {
       padding: 16px 12px;

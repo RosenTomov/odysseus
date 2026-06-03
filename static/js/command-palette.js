@@ -143,7 +143,8 @@ function render(q) {
     }
     for (const m of groups.get(section)) {
       const row = document.createElement('div');
-      row.className = 'cmd-palette-item';
+      // Reuse the chat-search row styling (CONTRIBUTING: no parallel widgets).
+      row.className = 'search-result-item';
       row.id = 'cmd-palette-opt-' + idx;
       row.setAttribute('role', 'option');
       row.setAttribute('aria-selected', 'false');
@@ -166,9 +167,9 @@ function setActive(i) {
   if (!_results.length) return;
   _active = Math.max(0, Math.min(i, _results.length - 1));
   const list = el('cmd-palette-list');
-  list.querySelectorAll('.cmd-palette-item').forEach(row => {
+  list.querySelectorAll('.search-result-item').forEach(row => {
     const sel = Number(row.dataset.index) === _active;
-    row.classList.toggle('active', sel);
+    row.classList.toggle('selected', sel);
     row.setAttribute('aria-selected', sel ? 'true' : 'false');
     if (sel) row.scrollIntoView({ block: 'nearest' });
   });
