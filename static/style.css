@@ -6087,6 +6087,10 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       border-radius: 4px;
       background: color-mix(in srgb, var(--fg) 6%, transparent);
     }
+    /* Double-Shift needs a hardware keyboard — hide the hint on mobile. */
+    @media (max-width: 768px) {
+      .search-footer-hint { display: none; }
+    }
     /* ── Command palette (Search Everywhere, double-Shift) ──
        Layer survey: .search-overlay 300 / base .modal 260 / ui.js _promote
        bumps visible modals from 1000+ / toasts & spinners up to 99999.
