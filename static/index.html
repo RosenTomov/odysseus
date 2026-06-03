@@ -2239,6 +2239,11 @@
       <input type="text" id="search-input" placeholder="Search conversations..." autocomplete="off" />
       <div class="search-results" id="search-results"></div>
       <div class="search-footer-hint" id="search-footer-hint">Double-tap <kbd>Shift</kbd> to search everything &mdash; windows, settings, actions</div>
+      <!-- Mobile entry point: no hardware Shift, so offer a tap target instead. -->
+      <button type="button" class="search-everywhere-btn" id="search-everywhere-btn">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="10" cy="10" r="7"/><path d="M21 21l-4.35-4.35"/><line x1="10" y1="7" x2="10" y2="13"/><line x1="7" y1="10" x2="13" y2="10"/></svg>
+        <span>Search everywhere</span>
+      </button>
     </div>
   </div>
 

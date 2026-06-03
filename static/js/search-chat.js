@@ -2,6 +2,7 @@
 
 import uiModule from './ui.js';
 import sessionModule from './sessions.js';
+import commandPaletteModule from './command-palette.js';
 
 let API_BASE = '';
 let debounceTimer = null;
@@ -191,6 +192,15 @@ export function init(apiBase) {
   if (overlay) {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeSearch();
+    });
+  }
+
+  // Mobile entry point to Search Everywhere (no hardware Shift to double-tap).
+  const everywhereBtn = el('search-everywhere-btn');
+  if (everywhereBtn) {
+    everywhereBtn.addEventListener('click', () => {
+      closeSearch();
+      commandPaletteModule.open();
     });
   }
 }

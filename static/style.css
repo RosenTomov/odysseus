@@ -6089,9 +6089,33 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       border-radius: 4px;
       background: color-mix(in srgb, var(--fg) 6%, transparent);
     }
-    /* Double-Shift needs a hardware keyboard — hide the hint on mobile. */
+    /* Mobile entry point to Search Everywhere — replaces the double-Shift
+       text hint below (no hardware Shift on touch devices). */
+    .search-everywhere-btn {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      padding: 9px 14px;
+      border: none;
+      border-top: 1px solid var(--border);
+      background: transparent;
+      color: color-mix(in srgb, var(--fg) 55%, transparent);
+      font-size: 11.5px;
+      font-family: 'Fira Code', monospace;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .search-everywhere-btn:active {
+      background: color-mix(in srgb, var(--fg) 6%, transparent);
+    }
+    /* Double-Shift needs a hardware keyboard — on mobile swap the text hint
+       for the tappable entry, and drop the Tab-key hint from the palette. */
     @media (max-width: 768px) {
       .search-footer-hint { display: none; }
+      .search-everywhere-btn { display: flex; }
+      .cmd-palette-tabs-hint { display: none; }
+      .cmd-palette-tabs { overflow-x: auto; }
     }
     /* ── Command palette (Search Everywhere, double-Shift) ──
        Reuses the .search-overlay/.search-popup/.search-result-item look;
@@ -6112,6 +6136,9 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       gap: 2px;
       padding: 6px 8px 0;
       border-bottom: 1px solid var(--border);
+      /* flex-column parent + overflow-x:auto would otherwise let this row
+         shrink to nothing when the list fills the popup's max-height. */
+      flex-shrink: 0;
     }
     .cmd-palette-tab {
       background: transparent;
