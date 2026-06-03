@@ -17,10 +17,12 @@ import uiModule from './ui.js';
 import { registerMenuDismiss } from './escMenuStack.js';
 
 const SECTION_ORDER = ['Windows', 'Settings', 'Actions'];
+const TABS = ['all', ...SECTION_ORDER]; // category tabs; Tab key cycles them
 const DEBOUNCE_MS = 120;
 
 let _results = [];      // flat [{item, score, positions}] in rendered order
 let _active = -1;
+let _activeTab = 'all';
 let _returnFocus = null;
 let _unregEsc = () => {};
 let _debounce = null;
@@ -59,7 +61,7 @@ export function open() {
   document.body.classList.add('cmd-palette-scroll-lock');
   const input = el('cmd-palette-input');
   input.value = '';
-  render('');
+  setTab('all'); // fresh open always starts on All (also renders)
   input.focus();
   // LIFO Esc registration — the ui.js arbiter pops this before any modal.
   _unregEsc = registerMenuDismiss(() => close());
@@ -82,6 +84,18 @@ export function close(restoreFocus = true) {
   _active = -1;
 }
 
+// Switch the category tab (clicks + Tab-key cycling) and re-render with the
+// current query.
+function setTab(tab) {
+  _activeTab = TABS.includes(tab) ? tab : 'all';
+  el('cmd-palette-tabs').querySelectorAll('.cmd-palette-tab').forEach(btn => {
+    const on = btn.dataset.tab === _activeTab;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  render(el('cmd-palette-input').value.trim());
+}
+
 function render(q) {
   const list = el('cmd-palette-list');
   const input = el('cmd-palette-input');
@@ -89,13 +103,17 @@ function render(q) {
   _results = [];
   _active = -1;
 
-  const matches = fuzzyFilter(q, registry.getItems(),
+  let items = registry.getItems();
+  if (_activeTab !== 'all') items = items.filter(it => it.section === _activeTab);
+  const matches = fuzzyFilter(q, items,
     it => it.title + ' ' + (it.keywords || []).join(' '));
 
   if (!matches.length) {
     const empty = document.createElement('div');
     empty.className = 'cmd-palette-empty';
-    empty.textContent = `No matches for "${q}"`;
+    empty.textContent = _activeTab === 'all'
+      ? `No matches for "${q}"`
+      : `No matches for "${q}" in ${_activeTab}`;
     list.appendChild(empty);
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-activedescendant');
@@ -116,11 +134,13 @@ function render(q) {
 
   let idx = 0;
   for (const section of order) {
-    const header = document.createElement('div');
-    header.className = 'search-group-header';
-    header.setAttribute('role', 'presentation');
-    header.textContent = section;
-    list.appendChild(header);
+    if (_activeTab === 'all') { // headers are noise on a single-category tab
+      const header = document.createElement('div');
+      header.className = 'search-group-header';
+      header.setAttribute('role', 'presentation');
+      header.textContent = section;
+      list.appendChild(header);
+    }
     for (const m of groups.get(section)) {
       const row = document.createElement('div');
       row.className = 'cmd-palette-item';
@@ -179,7 +199,14 @@ function handleKeydown(e) {
   else if (e.key === 'Home') { e.preventDefault(); setActive(0); }
   else if (e.key === 'End') { e.preventDefault(); setActive(_results.length - 1); }
   else if (e.key === 'Enter') { e.preventDefault(); activate(); }
-  else if (e.key === 'Tab') e.preventDefault(); // input is the only focusable: trap
+  else if (e.key === 'Tab') {
+    // JetBrains parity: Tab / Shift+Tab cycle the category tabs. Focus never
+    // leaves the input, so this doubles as the focus trap.
+    e.preventDefault();
+    const dir = e.shiftKey ? -1 : 1;
+    const next = (TABS.indexOf(_activeTab) + dir + TABS.length) % TABS.length;
+    setTab(TABS[next]);
+  }
 }
 
 function handleInput(e) {
@@ -195,6 +222,9 @@ export function init() {
   input.addEventListener('input', handleInput);
   input.addEventListener('keydown', handleKeydown);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  el('cmd-palette-tabs').querySelectorAll('.cmd-palette-tab').forEach(btn => {
+    btn.addEventListener('click', () => { setTab(btn.dataset.tab); input.focus(); });
+  });
   // Highest-priority hook for the ui.js Escape arbiter (see _odyEscExpandGuard):
   // it must close the palette before its hovered-window/modal handling runs.
   window._odyCmdPalette = { isOpen, close };

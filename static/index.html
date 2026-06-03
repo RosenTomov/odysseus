@@ -2247,6 +2247,13 @@
        which would fight the fixed layering documented in style.css. -->
   <div class="cmd-palette-overlay" id="cmd-palette-overlay" hidden>
     <div class="cmd-palette-popup">
+      <div class="cmd-palette-tabs" id="cmd-palette-tabs">
+        <button type="button" class="cmd-palette-tab" data-tab="all" aria-pressed="true">All</button>
+        <button type="button" class="cmd-palette-tab" data-tab="Windows" aria-pressed="false">Windows</button>
+        <button type="button" class="cmd-palette-tab" data-tab="Settings" aria-pressed="false">Settings</button>
+        <button type="button" class="cmd-palette-tab" data-tab="Actions" aria-pressed="false">Actions</button>
+        <span class="cmd-palette-tabs-hint"><kbd>Tab</kbd> to switch</span>
+      </div>
       <input type="text" id="cmd-palette-input" placeholder="Search everywhere..."
              autocomplete="off" role="combobox" aria-expanded="false"
              aria-controls="cmd-palette-list" aria-autocomplete="list"

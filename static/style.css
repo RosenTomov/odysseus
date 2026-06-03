@@ -6118,6 +6118,48 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       flex-direction: column;
       max-height: 60vh;
     }
+    .cmd-palette-tabs {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 6px 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .cmd-palette-tab {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: color-mix(in srgb, var(--fg) 55%, transparent);
+      font-size: 11.5px;
+      font-family: inherit;
+      padding: 4px 10px 6px;
+      cursor: pointer;
+      border-radius: 4px 4px 0 0;
+    }
+    .cmd-palette-tab:hover {
+      color: var(--fg);
+      background: color-mix(in srgb, var(--fg) 5%, transparent);
+    }
+    .cmd-palette-tab.active {
+      color: var(--fg);
+      border-bottom-color: var(--accent, #e8a830);
+    }
+    .cmd-palette-tabs-hint {
+      margin-left: auto;
+      padding: 0 6px 4px;
+      font-size: 9.5px;
+      color: color-mix(in srgb, var(--fg) 30%, transparent);
+      white-space: nowrap;
+    }
+    .cmd-palette-tabs-hint kbd {
+      font-family: 'Fira Code', monospace;
+      font-size: 9px;
+      padding: 0 4px;
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 3px;
+      background: color-mix(in srgb, var(--fg) 6%, transparent);
+    }
     .cmd-palette-popup input#cmd-palette-input {
       width: 100%;
       background: transparent;
