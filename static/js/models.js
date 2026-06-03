@@ -571,6 +571,7 @@ export async function refreshModels(force = false) {
               'Tip: Attach images or files using the + button next to the input.',
             ]
           : [
+              'Tip: Double-tap Shift to search everything - windows, settings, actions.',
               'Tip: Press Ctrl+K to search across all your conversations.',
               'Tip: Press Ctrl+B to quickly toggle the sidebar.',
               'Tip: Shift-click the sidebar toggle to swap it to the other side.',
