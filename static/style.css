@@ -6070,6 +6070,23 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       padding: 0 2px;
       font-weight: 600;
     }
+    /* Cross-promote Search Everywhere from the chat-search popup. */
+    .search-footer-hint {
+      padding: 7px 14px;
+      border-top: 1px solid var(--border);
+      font-size: 10.5px;
+      color: color-mix(in srgb, var(--fg) 40%, transparent);
+      flex-shrink: 0;
+    }
+    .search-footer-hint kbd {
+      font-family: 'Fira Code', monospace;
+      font-size: 9.5px;
+      padding: 1px 5px;
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--fg) 6%, transparent);
+    }
     /* ── Command palette (Search Everywhere, double-Shift) ──
        Layer survey: .search-overlay 300 / base .modal 260 / ui.js _promote
        bumps visible modals from 1000+ / toasts & spinners up to 99999.
