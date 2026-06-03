@@ -14,6 +14,10 @@ export function openSearch() {
   const overlay = el('search-overlay');
   if (!overlay) return;
   overlay.classList.remove('hidden');
+  // Don't promote double-Shift to users who disabled it in Shortcuts.
+  // Re-checked on every open so the toggle takes effect immediately.
+  const hint = el('search-footer-hint');
+  if (hint) hint.hidden = window._odyDoubleShiftDisabled === true;
   const input = el('search-input');
   if (input) {
     input.value = '';
