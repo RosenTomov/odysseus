@@ -125,14 +125,14 @@ def test_pip_install_fallback_chain_propagates_failure_in_venv():
     reported success even though nothing was installed.  The negated
     `{ ! venv_check && user }` shape propagates the failure correctly.
     """
-    # Force "in venv" by making venv_check exit 0 directly, mirroring the
-    # outside-venv companion test below. Probing the real interpreter's
-    # sys.prefix instead made the outcome depend on whether the test runner
-    # itself is in a venv - CI runs pytest with no venv, which flips the branch
-    # and spuriously fails the assertion.
+    # Simulate "inside a venv" deterministically: the venv check exits 0.
+    # Base install fails, venv_check exits 0, negated to 1,
+    # && skips user, group exits 1.  This avoids depending on whether the
+    # test runner's own interpreter happens to be inside a venv (which
+    # differs between local and CI environments).
     script = (
-        "python3 -c \"import sys; sys.exit(1)\" || "
-        "{ ! python3 -c \"import sys; sys.exit(0)\" "  # venv_check=0 → negated to 1 → user skipped
+        "false || "
+        "{ ! true "  # venv_check=0 (in venv) → negated to 1 → user skipped
         "&& echo user_attempt; }"
     )
     result = subprocess.run(
