@@ -53,22 +53,32 @@ class TestDetectProviderLmStudio:
         "http://localhost/v1/chat/completions",        # no explicit port
     ])
     def test_local_host_fingerprint_confirms(self, monkeypatch, url):
+        # The fingerprint probe is a network side effect, so callers must opt in
+        # with probe=True; only paths that branch on the lmstudio value do.
         monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: True)
-        assert llm_core._detect_provider(url) == "lmstudio"
+        assert llm_core._detect_provider(url, probe=True) == "lmstudio"
 
     def test_local_non_lmstudio_server_not_misdetected(self, monkeypatch):
         # vLLM / llama.cpp / a proxy: the fingerprint fails, so the result must
         # NOT be lmstudio — otherwise stream_options is silently dropped and
         # token-usage stats break for that server.
         monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", lambda u: False)
-        assert llm_core._detect_provider("http://localhost:1234/v1/chat/completions") == "openai"
+        assert llm_core._detect_provider("http://localhost:1234/v1/chat/completions", probe=True) == "openai"
 
     def test_public_host_is_never_fingerprinted(self, monkeypatch):
         # A cloud endpoint must never trigger a probe, even on port 1234.
         def fail(_u):
             raise AssertionError("public host must not be fingerprinted")
         monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", fail)
-        assert llm_core._detect_provider("https://api.example.com:1234/v1/chat/completions") == "openai"
+        assert llm_core._detect_provider("https://api.example.com:1234/v1/chat/completions", probe=True) == "openai"
+
+    def test_probe_disabled_by_default_skips_fingerprint(self, monkeypatch):
+        # Hot paths (header building, reachability, model listing) call
+        # _detect_provider without probe=True and must never hit the network.
+        def fail(_u):
+            raise AssertionError("default detection must not fingerprint")
+        monkeypatch.setattr(llm_core, "_fingerprint_is_lmstudio", fail)
+        assert llm_core._detect_provider("http://localhost:1234/v1/chat/completions") == "openai"
 
 
 # ════════════════════════════════════════════════════════════

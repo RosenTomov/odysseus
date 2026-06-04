@@ -363,7 +363,7 @@ def _host_match(url: str, *domains: str) -> bool:
     return any(host == d or host.endswith("." + d) for d in domains)
 
 
-def _detect_provider(url: str) -> str:
+def _detect_provider(url: str, *, probe: bool = False) -> str:
     """Detect the API provider from a configured endpoint URL.
 
     Matches on hostname (exact or subdomain) rather than substring, so a URL
@@ -371,6 +371,13 @@ def _detect_provider(url: str) -> str:
     look-alike host such as ``anthropic.com.example`` — is not misclassified.
     Unknown hosts fall back to the OpenAI-compatible default, which the
     majority of providers implement.
+
+    LM Studio cannot be identified by hostname (it runs on arbitrary local
+    ports), so confirming it requires a live probe of its native API. That
+    probe is gated behind ``probe=True`` because most callers (header building,
+    reachability checks, model listing) treat LM Studio identically to any
+    OpenAI-compatible endpoint and must stay free of network side effects.
+    Only callers that branch on the ``lmstudio`` value opt in.
     """
     if _is_ollama_native_url(url):
         return "ollama"
@@ -380,11 +387,12 @@ def _detect_provider(url: str) -> str:
         return "openrouter"
     if _host_match(url, "groq.com"):
         return "groq"
-    try:
-        if _is_local_host(urlparse(url).hostname) and _fingerprint_is_lmstudio(url):
-            return "lmstudio"
-    except Exception:
-        pass
+    if probe:
+        try:
+            if _is_local_host(urlparse(url).hostname) and _fingerprint_is_lmstudio(url):
+                return "lmstudio"
+        except Exception:
+            pass
     from src.copilot import is_copilot_base
     if is_copilot_base(url):
         return "copilot"
@@ -427,7 +435,7 @@ def _provider_label(url: str) -> str:
     if _host_match(url, "together.xyz", "together.ai"): return "Together"
     if _host_match(url, "fireworks.ai"): return "Fireworks"
     if _is_ollama_native_url(url): return "Ollama"
-    if _detect_provider(url) == "lmstudio":
+    if _detect_provider(url, probe=True) == "lmstudio":
         return "LM Studio"
     try:
         host = (urlparse(url).hostname or "").lower()
@@ -1223,7 +1231,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
       - event: error                       — errors
       - data: [DONE]                       — end of stream
     """
-    provider = await asyncio.to_thread(_detect_provider, url)
+    provider = await asyncio.to_thread(_detect_provider, url, probe=True)
     messages_copy = _sanitize_llm_messages(messages)
 
     # Consolidate multiple system messages into one at the start.
