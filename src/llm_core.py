@@ -274,7 +274,14 @@ def _is_ollama_native_url(url: str) -> bool:
     if path.startswith("/v1"):
         return False
     local_ollama_host = host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"} or parsed.port == 11434
-    return local_ollama_host and (path == "" or path == "/api" or path.startswith("/api/"))
+    if path == "":
+        # A bare host:port is only clearly native Ollama on port 11434.
+        # On any other local port, a path-less URL could be LM Studio,
+        # vLLM, llama.cpp, or a proxy, so don't claim it here. Let the
+        # LM Studio fingerprint probe and the OpenAI-compatible default
+        # sort it out.
+        return parsed.port == 11434
+    return local_ollama_host and (path == "/api" or path.startswith("/api/"))
 
 
 def _ollama_api_root(url: str) -> str:
